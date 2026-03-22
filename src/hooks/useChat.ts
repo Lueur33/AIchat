@@ -2,7 +2,18 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, Session } from '../types';
 
 const STORAGE_KEY = 'ai-chat-sessions';
-
+// 天气 API 响应类型
+interface WeatherResponse {
+  code: string;
+  now: {
+    temp: string;
+    text: string;
+    windDir: string;
+    windScale: string;
+    humidity: string;
+  };
+  location?: Array<{ name: string; adm: string; id: string }>;
+}
 export const useChat = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
@@ -88,6 +99,9 @@ export const useChat = () => {
     });
   }, [currentSessionId]);
 
+const apiKey = import.meta.env.VITE_OPENAI_API_KEY;
+const apiUrl = import.meta.env.VITE_OPENAI_API_URL;
+const modelName = import.meta.env.VITE_MODEL || 'Qwen/Qwen2.5-7B-Instruct';
   // 发送消息
   const sendMessage = useCallback(async (content: string) => {
     if (!content.trim() || !currentSessionId) return;
@@ -124,16 +138,36 @@ export const useChat = () => {
     abortControllerRef.current = new AbortController();
 
     try {
-      const response = await fetch(import.meta.env.VITE_OPENAI_API_URL, {
+      const response = await fetch(apiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${import.meta.env.VITE_OPENAI_API_KEY}`,
+          Authorization: `Bearer ${apiKey }`,
         },
         body: JSON.stringify({
-          model: import.meta.env.VITE_MODEL || 'deepseek-chat', // 可配置
+          model: modelName || 'deepseek-chat', // 可配置
           messages: apiMessages,
-          stream: true,
+          stream: false,
+          tools: [
+            {
+              type: 'function',
+              function: {
+                name: 'get_weather',
+                description: '获取指定城市的实时天气信息',
+                parameters: {
+                  type: 'object',
+                  properties: {
+                    city: {
+                      type: 'string',
+                      description: '城市名称，例如：北京、上海、深圳、广州',
+                    },
+                  },
+                  required: ['city'],
+                },
+              },
+            },
+          ],
+          tool_choice: 'auto',
         }),
         signal: abortControllerRef.current.signal,
       });
@@ -144,46 +178,90 @@ export const useChat = () => {
       }
       if (!response.body) throw new Error('响应体为空');
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder('utf-8');
-      let accumulatedContent = '';
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`请求失败: ${response.status} ${errorText}`);
+      }
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const data = await response.json();
+      const assistantMessage = data.choices[0].message;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n').filter(line => line.startsWith('data: '));
-
-        for (const line of lines) {
-          const data = line.replace('data: ', '');
-          if (data === '[DONE]') continue;
-
-          try {
-            const parsed = JSON.parse(data);
-            const delta = parsed.choices[0]?.delta?.content;
-            if (delta) {
-              accumulatedContent += delta;
-              // 更新会话中的 AI 消息
-              setSessions(prev => prev.map(session => {
-                if (session.id !== currentSessionId) return session;
-                const lastMsg = session.messages[session.messages.length - 1];
-                if (lastMsg?.id === assistantMessageId) {
-                  const newMessages = [...session.messages];
-                  newMessages[newMessages.length - 1] = {
-                    ...lastMsg,
-                    content: accumulatedContent,
-                  };
-                  return { ...session, messages: newMessages, updatedAt: Date.now() };
-                }
-                return session;
-              }));
+      // 检查是否有工具调用（天气查询）
+      if (assistantMessage.tool_calls && assistantMessage.tool_calls.length > 0) {
+        const toolCall = assistantMessage.tool_calls[0];
+        
+        if (toolCall.function.name === 'get_weather') {
+          const args = JSON.parse(toolCall.function.arguments);
+          const city = args.city;
+          
+          // 调用天气 API
+          const weatherInfo = await fetchWeather(city);
+          
+          // 将天气信息作为工具响应，再次调用 AI
+          const secondMessages = [
+            ...apiMessages,
+            {
+              role: 'assistant',
+              content: null,
+              tool_calls: assistantMessage.tool_calls,
+            },
+            {
+              role: 'tool',
+              tool_call_id: toolCall.id,
+              content: weatherInfo,
+            },
+          ];
+          
+          const secondResponse = await fetch(apiUrl, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify({
+              model: modelName,
+              messages: secondMessages,
+              stream: false,
+            }),
+          });
+          
+          const finalData = await secondResponse.json();
+          const finalContent = finalData.choices[0].message.content;
+          
+          // 更新会话中的 AI 消息
+          setSessions(prev => prev.map(session => {
+            if (session.id !== currentSessionId) return session;
+            const lastMsg = session.messages[session.messages.length - 1];
+            if (lastMsg?.id === assistantMessageId) {
+              const newMessages = [...session.messages];
+              newMessages[newMessages.length - 1] = {
+                ...lastMsg,
+                content: finalContent,
+              };
+              return { ...session, messages: newMessages, updatedAt: Date.now() };
             }
-          } catch (err) {
-            console.error('解析错误', err);
-          }
+            return session;
+          }));
+          setIsLoading(false);
+          return;
         }
       }
+
+      // 普通回复（没有工具调用）
+      const content = assistantMessage.content || '';
+      setSessions(prev => prev.map(session => {
+        if (session.id !== currentSessionId) return session;
+        const lastMsg = session.messages[session.messages.length - 1];
+        if (lastMsg?.id === assistantMessageId) {
+          const newMessages = [...session.messages];
+          newMessages[newMessages.length - 1] = {
+            ...lastMsg,
+            content: content,
+          };
+          return { ...session, messages: newMessages, updatedAt: Date.now() };
+        }
+        return session;
+      }));
     } catch (err: any) {
       if (err.name !== 'AbortError') {
         setError(err.message);
@@ -199,7 +277,46 @@ export const useChat = () => {
       abortControllerRef.current = null;
     }
   }, [currentSessionId, sessions, updateSessionMessages]);
-
+  
+  // 查询天气的函数
+  const fetchWeather = useCallback(async (city: string): Promise<string> => {
+    try {
+      const apiKey = import.meta.env.VITE_WEATHER_API_KEY;
+      if (!apiKey) {
+        return '天气功能未配置，请在 .env 文件中添加 VITE_WEATHER_API_KEY';
+      }
+      
+      // 第一步：获取城市 location ID
+      const geoUrl = `https://geoapi.qweather.com/v2/city/lookup?location=${encodeURIComponent(city)}&key=${apiKey}`;
+      const geoRes = await fetch(geoUrl);
+      const geoData = await geoRes.json();
+      
+      if (geoData.code !== '200' || !geoData.location?.length) {
+        return `未找到城市 "${city}" 的天气信息，请检查城市名称是否正确（如：北京、上海、深圳）`;
+      }
+      
+      const locationId = geoData.location[0].id;
+      const locationName = geoData.location[0].name;
+      const adm = geoData.location[0].adm;
+      
+      // 第二步：获取实时天气
+      const weatherUrl = `https://devapi.qweather.com/v7/weather/now?location=${locationId}&key=${apiKey}`;
+      const weatherRes = await fetch(weatherUrl);
+      const weatherData = await weatherRes.json();
+      
+      if (weatherData.code !== '200') {
+        return `获取天气信息失败，请稍后重试`;
+      }
+      
+      const { temp, text, windDir, windScale, humidity } = weatherData.now;
+      
+      return `${locationName}（${adm}）当前天气：${text}，温度 ${temp}℃，${windDir} ${windScale}级，湿度 ${humidity}%`;
+    } catch (error) {
+      console.error('天气查询失败:', error);
+      return '天气查询服务暂时不可用，请检查网络连接后重试';
+    }
+  }, []);
+  
   const stopGeneration = useCallback(() => {
     abortControllerRef.current?.abort();
   }, []);

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Send, Square, Trash2 } from 'lucide-react';
+import { Send, Square, Trash2, Mic, MicOff } from 'lucide-react';
 import type { KeyboardEvent } from 'react';
 
 interface InputAreaProps {
@@ -9,6 +9,14 @@ interface InputAreaProps {
   isLoading: boolean;
 }
 
+// 声明 Web Speech API 类型
+declare global {
+  interface Window {
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
+  }
+}
+
 export const InputArea = ({
   onSend,
   onStop,
@@ -16,6 +24,7 @@ export const InputArea = ({
   isLoading,
 }: InputAreaProps) => {
   const [input, setInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
 
   const handleSend = () => {
     if (input.trim() && !isLoading) {
@@ -31,6 +40,45 @@ export const InputArea = ({
     }
   };
 
+  // 语音输入功能
+  const startVoiceInput = () => {
+    // 检查浏览器是否支持语音识别
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      alert('您的浏览器不支持语音输入功能，请使用 Chrome、Edge 或 Safari 等现代浏览器');
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'zh-CN'; // 中文识别
+    recognition.interimResults = false; // 只返回最终结果
+    recognition.maxAlternatives = 1;
+
+    recognition.onstart = () => {
+      setIsListening(true);
+    };
+
+    recognition.onresult = (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setInput(transcript);
+      setIsListening(false);
+    };
+
+    recognition.onerror = (event: any) => {
+      console.error('语音识别错误:', event.error);
+      setIsListening(false);
+      if (event.error !== 'not-allowed') {
+        alert('语音识别失败，请重试');
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognition.start();
+  };
+
   return (
     <div className="relative z-10 border-t border-gray-200/50 dark:border-gray-700/50 p-4 bg-white/60 dark:bg-gray-800/60 backdrop-blur-md">
       <div className="max-w-4xl mx-auto flex gap-3 items-end">
@@ -44,6 +92,20 @@ export const InputArea = ({
           disabled={isLoading}
         />
         <div className="flex gap-2">
+          {/* 语音输入按钮 */}
+          <button
+            onClick={startVoiceInput}
+            disabled={isLoading || isListening}
+            className={`p-3 rounded-2xl transition-all duration-200 shadow-lg ${
+              isListening
+                ? 'bg-red-500 text-white animate-pulse'
+                : 'bg-purple-500/80 hover:bg-purple-600 text-white'
+            } disabled:opacity-50 disabled:hover:scale-100`}
+            title={isListening ? '正在聆听...' : '语音输入'}
+          >
+            {isListening ? <MicOff size={20} /> : <Mic size={20} />}
+          </button>
+
           {isLoading ? (
             <button
               onClick={onStop}

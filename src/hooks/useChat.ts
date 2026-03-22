@@ -2,18 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 import type { Message, Session } from '../types';
 
 const STORAGE_KEY = 'ai-chat-sessions';
-// 天气 API 响应类型
-interface WeatherResponse {
-  code: string;
-  now: {
-    temp: string;
-    text: string;
-    windDir: string;
-    windScale: string;
-    humidity: string;
-  };
-  location?: Array<{ name: string; adm: string; id: string }>;
-}
+
 export const useChat = () => {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);

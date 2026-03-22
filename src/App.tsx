@@ -1,12 +1,13 @@
 import { useState } from 'react';
-import { Menu, X } from 'lucide-react';
 import { ChatContainer } from './components/ChatContainer';
 import { InputArea } from './components/InputArea';
 import { Sidebar } from './components/Sidebar';
+import { WelcomePage } from './components/WelcomePage';
 import { useChat } from './hooks/useChat';
 import './index.css';
 
 function App() {
+  const [hasStarted, setHasStarted] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(true);
 
   const {
@@ -26,13 +27,18 @@ function App() {
     regenerateMessage,
   } = useChat();
 
-  // 获取当前会话标题
   const currentSession = sessions.find(s => s.id === currentSessionId);
   const currentTitle = currentSession?.title || '新对话';
 
+  // 如果还没开始，显示欢迎页面
+  if (!hasStarted) {
+    return <WelcomePage onStart={() => setHasStarted(true)} />;
+  }
+
+  // 开始后显示聊天界面
   return (
     <div className="flex h-screen bg-gradient-to-br from-slate-100 to-gray-200 dark:from-gray-900 dark:to-gray-800">
-      {/* 侧边栏 - 根据状态控制宽度和可见性 */}
+      {/* 侧边栏 */}
       <div
         className={`transition-all duration-300 ease-in-out ${
           sidebarOpen ? 'w-64' : 'w-0 overflow-hidden'
@@ -49,19 +55,26 @@ function App() {
 
       {/* 主聊天区域 */}
       <div className="flex-1 flex flex-col relative">
-        {/* 顶部栏：汉堡菜单 + 居中标题 */}
+        {/* 顶部栏 */}
         <header className="relative z-10 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md shadow-sm p-4 border-b border-gray-200/50 dark:border-gray-700/50 flex items-center justify-between">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="p-2 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
             aria-label={sidebarOpen ? '关闭侧边栏' : '打开侧边栏'}
           >
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
+            {sidebarOpen ? (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            ) : (
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            )}
           </button>
           <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent absolute left-1/2 transform -translate-x-1/2">
             {currentTitle}
           </h1>
-          {/* 占位元素，保持布局对称 */}
           <div className="w-8"></div>
         </header>
 
